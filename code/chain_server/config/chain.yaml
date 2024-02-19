@@ -1,0 +1,24 @@
+vector_store:
+  name: milvus
+  url: http://vector-db:19530
+  collection_name: documents_chains
+  collection_dimentions: 1024
+  nlist: 64
+  nprobe: 16
+
+llm:
+  server_url: http://llm-server:8000/v1
+  model_name: mistralai/Mistral-7B-Instruct-v0.2
+  model_engine: openai
+  model_temperature: 1.0
+
+text_splitter:
+  chunk_size: 510
+  chunk_overlap: 200
+
+embeddings:
+  model_name: intfloat/e5-large-v2
+  model_engine: huggingface
+  dimensions: 1024
+
+# prompts:

@@ -1,0 +1,4 @@
+serverUrl: http://chain-server
+serverPort: 10000
+serverPrefix: ''
+modelName: mistralai/Mistral-7B-Instruct-v0.2

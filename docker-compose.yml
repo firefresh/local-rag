@@ -1,0 +1,189 @@
+version: '3.9'
+services:
+  llm-server:
+    image: ghcr.io/mistralai/mistral-src/vllm:latest
+    restart: unless-stopped
+    command: '--host 0.0.0.0 --model "mistralai/Mistral-7B-Instruct-v0.2"'
+    #command: '--host 0.0.0.0 --model "HuggingFaceH4/zephyr-7b-beta"'
+    environment:
+      - HF_TOKEN=$HF_TOKEN
+    volumes:
+      - /storage/z-rag-stack/server/hub:/root/.cache/huggingface/hub
+    ports:
+      - 8000:8000
+    expose:
+      - 8000
+    logging:
+      driver:  json-file
+      options:
+        max-file: "3"
+        max-size: '10m'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    networks:
+      - rag
+
+  vector-db-etcd:
+    restart: unless-stopped
+    image: quay.io/coreos/etcd:v3.5.5
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - vector-db-etcd-data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    logging:
+      driver:  json-file
+      options:
+        max-file: "3"
+        max-size: '10m'
+    networks:
+      - vector-db
+
+  vector-db-fs:
+    restart: unless-stopped
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    ports:
+      - "9001:9001"
+      - "9000:9000"
+    volumes:
+      - vector-db-fs-data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    logging:
+      driver:  json-file
+      options:
+        max-file: "3"
+        max-size: '10m'
+    networks:
+      - vector-db
+
+  vector-db-ui:
+    restart: unless-stopped
+    image: zilliz/attu:v2.3.8
+    environment:
+      - MILVUS_URL=vector-db:19530
+    ports:
+      - 9092:3000
+    networks:
+      - vector-db
+    depends_on:
+      - vector-db
+    logging:
+      driver:  json-file
+      options:
+        max-file: "3"
+        max-size: '10m'
+
+  vector-db:
+    restart: unless-stopped
+    image: milvusdb/milvus:v2.3.8
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+    - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: vector-db-etcd:2379
+      MINIO_ADDRESS: vector-db-fs:9000
+    volumes:
+      - vector-db-data:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    logging:
+      driver:  json-file
+      options:
+        max-file: "3"
+        max-size: '10m'
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on:
+      - "vector-db-etcd"
+      - "vector-db-fs"
+    networks:
+      - vector-db
+      - rag
+
+  chain-server:
+    restart: unless-stopped
+    build:
+      context: code/chain_server
+      dockerfile: Dockerfile
+      tags:
+        - "chain-server:latest-dev"
+    volumes:
+      - ./config/chain.yaml:/app/config/chain.yaml
+    environment:
+      - MODEL_ID=mistralai/Mistral-7B-Instruct-v0.2
+    ports:
+      - 10000:10000
+    depends_on:
+      - llm-server
+    networks:
+      - rag
+    logging:
+      driver:  json-file
+      options:
+        max-file: "3"
+        max-size: '10m'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+
+  chat-ui:
+    restart: unless-stopped
+    build:
+      context: code/chatui
+      dockerfile: Dockerfile
+      tags:
+        - "chat-ui:latest-dev"
+    environment:
+      - APP_VERBOSITY=2
+    volumes:
+      - ./config/chat.yaml:/app/config/chat.yaml
+    logging:
+      driver:  json-file
+      options:
+        max-file: "3"
+        max-size: '10m'
+    ports:
+      - 10001:8080
+    depends_on:
+      - chain-server
+    networks:
+      - rag
+
+volumes:
+  vector-db-etcd-data:
+  vector-db-fs-data:
+  vector-db-data:
+
+networks:
+  vector-db:
+  rag:
